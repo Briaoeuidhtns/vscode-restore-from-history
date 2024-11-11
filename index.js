@@ -26,7 +26,6 @@ const argv = await yargs(hideBin(process.argv))
   .option('history', {
     alias: 'h',
     type: 'string',
-    // default: path.join(process.env.HOME, '.config', "Code", "User", "History"),
     description: 'path to history directory',
   })
   .option('root', {
@@ -37,7 +36,6 @@ const argv = await yargs(hideBin(process.argv))
   .option('destination', {
     alias: 'o',
     type: 'string',
-    // default: process.cwd(),
     description: 'Path to restore to',
   })
   .demandCommand()
@@ -48,9 +46,12 @@ const argv = await yargs(hideBin(process.argv))
 const {
   _: [command],
   root,
-  history = path.join(process.env.HOME, '.config', 'Code', 'User', 'History'),
-  destination = process.cwd(),
+  path: pathToRestore,
 } = argv
+
+const history = argv.history || path.join(...(process.platform === 'win32' ? [process.env.APPDATA] : [process.env.HOME, '.config']), 'Code', 'User', 'History')
+const destination = argv.destination || process.cwd()
+
 
 const rootPath = path.resolve(root)
 const historyPath = path.resolve(history)
@@ -61,20 +62,28 @@ await fs.access(destinationPath)
 
 // process all the entries.json files in the history directory
 const historyEntries = await fs.readdir(historyPath)
-const historyEntriesResults = await Promise.all(
+const historyEntriesResults = (await Promise.all(
   historyEntries.map(async (entry) => {
-    const entriesPath = path.join(historyPath, entry, 'entries.json')
-    const entries = await fs.readFile(entriesPath, 'utf-8')
-    return {
-      ...JSON.parse(entries),
-      path: path.join(historyPath, entry),
+    try {
+      const entriesPath = path.join(historyPath, entry, 'entries.json')
+      const entries = await fs.readFile(entriesPath, 'utf-8')
+      return {
+        ...JSON.parse(entries),
+        path: path.join(historyPath, entry),
+      }
+    } catch (e) {
+      // console.error(e)
+      return null
     }
   }),
-)
+)).filter(Boolean)
 
+const realRootPath = 'file:///' + (rootPath + '/' + pathToRestore).replace(/\\/g, '/').replace(/^\//g, '').replace(/:/g, '%3A').replace('//', '/').toLowerCase()
+console.log(rootPath)
+// console.log(historyEntriesResults.map((entry) => entry.resource))
 // get the list of files that match the path
 const matchingEntries = historyEntriesResults.filter((entry) =>
-  entry.resource.startsWith('file://' + rootPath),
+  entry.resource.toLowerCase().startsWith(realRootPath),
 )
 
 // get the latest version of each file
@@ -91,7 +100,8 @@ const relativeEntries = latestEntries.map((entry) => {
     source: entry.path,
     destination: path.join(
       destinationPath,
-      entry.resource.replace('file://' + rootPath, ''),
+      pathToRestore,
+      entry.resource.toLowerCase().replace(realRootPath, '').replace(/%3A/g, ':')
     ),
   }
 })
@@ -105,6 +115,7 @@ if (command === 'list') {
     relativeEntries.map(async (entry) => {
       await fs.mkdir(path.dirname(entry.destination), { recursive: true })
       await fs.copyFile(entry.source, entry.destination)
+      console.log(entry.source + ' -> ' + entry.destination)
     }),
   )
 }
